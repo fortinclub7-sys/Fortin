@@ -85,8 +85,8 @@ class DatabaseService {
       const storedProds = this.getStorageItem(STORAGE_KEYS.PRODUCTS);
       if (storedProds) {
         const parsed = JSON.parse(storedProds);
-        // Verify if it contains the 22 official Fortin Club products
-        if (Array.isArray(parsed) && parsed.length === 22 && parsed.some(p => p.name === 'PANCHITOS PICANTES Y NATURALES')) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Keep user's saved catalog with all custom prices and edits intact
           this.productsCache = parsed;
         } else {
           // Initialize official catalog
@@ -136,6 +136,80 @@ class DatabaseService {
 
   private saveMovementsToLocalStorage() {
     this.setStorageItem(STORAGE_KEYS.MOVEMENTS, JSON.stringify(this.movementsCache));
+  }
+
+  /**
+   * Smart bidirectional merge between local cache and cloud documents:
+   * - Never overwrites a valid positive salePrice with zero.
+   * - Prefers the version with the newer updatedAt timestamp.
+   * - Queues products with local edits to be pushed up to Firestore.
+   */
+  private mergeProducts(
+    localProds: Product[],
+    cloudProds: Product[]
+  ): { merged: Product[]; toPushToCloud: Product[] } {
+    const toPushToCloud: Product[] = [];
+    const resultMap = new Map<string, Product>();
+
+    // 1. Index local products
+    localProds.forEach(lp => {
+      resultMap.set(lp.id, { ...lp });
+    });
+
+    // 2. Merge cloud products
+    cloudProds.forEach(cp => {
+      const existing = resultMap.get(cp.id);
+      if (!existing) {
+        // Cloud has product not in local
+        resultMap.set(cp.id, cp);
+      } else {
+        const localTime = new Date(existing.updatedAt || 0).getTime();
+        const cloudTime = new Date(cp.updatedAt || 0).getTime();
+
+        const localHasPrice = (existing.salePrice || 0) > 0;
+        const cloudHasPrice = (cp.salePrice || 0) > 0;
+
+        if (localHasPrice && !cloudHasPrice) {
+          // Local has user-configured price, cloud still has 0: local wins!
+          toPushToCloud.push(existing);
+        } else if (localTime > cloudTime) {
+          // Local was updated more recently: local wins!
+          toPushToCloud.push(existing);
+        } else if (cloudTime > localTime) {
+          // Cloud is strictly newer
+          const merged: Product = {
+            ...cp,
+            // Prevent cloud from zeroing a positive price
+            salePrice: cp.salePrice > 0 ? cp.salePrice : existing.salePrice
+          };
+          resultMap.set(cp.id, merged);
+        } else {
+          // Same timestamp: prefer valid price and keep local custom edits
+          const preferredPrice = existing.salePrice > 0 ? existing.salePrice : cp.salePrice;
+          const merged: Product = {
+            ...cp,
+            ...existing,
+            salePrice: preferredPrice
+          };
+          resultMap.set(cp.id, merged);
+          if (existing.salePrice > cp.salePrice) {
+            toPushToCloud.push(merged);
+          }
+        }
+      }
+    });
+
+    // 3. Local products that do not exist in cloud must be pushed to cloud
+    localProds.forEach(lp => {
+      if (!cloudProds.some(cp => cp.id === lp.id)) {
+        toPushToCloud.push(lp);
+      }
+    });
+
+    return {
+      merged: Array.from(resultMap.values()),
+      toPushToCloud
+    };
   }
 
   public getProducts(): Product[] {
@@ -190,7 +264,7 @@ class DatabaseService {
           try {
             await setDoc(doc(db, 'products', p.id), p);
           } catch (err) {
-            console.warn('Could not seed product to remote db (needs auth):', p.id);
+            // Unauthenticated or offline
           }
         }
       } else {
@@ -198,22 +272,41 @@ class DatabaseService {
         prodSnapshot.forEach(d => {
           cloudProds.push(d.data() as Product);
         });
-        if (cloudProds.length > 0) {
-          this.productsCache = cloudProds;
-          this.saveProductsToLocalStorage();
+
+        // Smart merge: never wipe out user-configured local prices or newer edits
+        const { merged, toPushToCloud } = this.mergeProducts(this.productsCache, cloudProds);
+        this.productsCache = merged;
+        this.saveProductsToLocalStorage();
+
+        // Push local updates up to cloud if any
+        if (toPushToCloud.length > 0 && auth.currentUser) {
+          for (const p of toPushToCloud) {
+            try {
+              await setDoc(doc(db, 'products', p.id), p);
+            } catch (err) {
+              // Ignore
+            }
+          }
         }
       }
 
       this.isLiveConnected = true;
 
-      // Realtime listener for products
+      // Realtime listener for products with smart merge
       onSnapshot(prodCol, (snapshot) => {
-        const prods: Product[] = [];
-        snapshot.forEach(d => prods.push(d.data() as Product));
-        if (prods.length > 0) {
-          this.productsCache = prods;
+        const cloudProds: Product[] = [];
+        snapshot.forEach(d => cloudProds.push(d.data() as Product));
+        if (cloudProds.length > 0) {
+          const { merged, toPushToCloud } = this.mergeProducts(this.productsCache, cloudProds);
+          this.productsCache = merged;
           this.saveProductsToLocalStorage();
           this.notify();
+
+          if (toPushToCloud.length > 0 && auth.currentUser) {
+            toPushToCloud.forEach(p => {
+              setDoc(doc(db, 'products', p.id), p).catch(() => {});
+            });
+          }
         }
       }, (error) => {
         console.warn('Realtime sync fallback to local cache:', error.message);
@@ -252,7 +345,6 @@ class DatabaseService {
       this.notify();
     } catch (e) {
       console.warn('Sync operating in resilient mode:', e);
-      // If auth error, notify but keep responsive
       this.isLiveConnected = false;
       this.notify();
     }
@@ -454,27 +546,26 @@ class DatabaseService {
     }
 
     const prod = this.productsCache[prodIndex];
+    const now = new Date().toISOString();
     const updated: Product = {
       ...prod,
       salePrice: Number(newSalePrice.toFixed(2)),
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
 
     this.productsCache[prodIndex] = updated;
     this.saveProductsToLocalStorage();
+    this.notify();
 
-    if (this.isLiveConnected && auth.currentUser) {
-      try {
-        await updateDoc(doc(db, 'products', productId), {
-          salePrice: updated.salePrice,
-          updatedAt: updated.updatedAt
-        });
-      } catch (e) {
-        console.warn('Error updating price in remote db:', e);
+    // Persist to remote db asynchronously if available
+    try {
+      if (auth.currentUser || this.isLiveConnected) {
+        await setDoc(doc(db, 'products', productId), updated);
       }
+    } catch (e) {
+      console.warn('Remote price sync pending (safely saved locally):', e);
     }
 
-    this.notify();
     return updated;
   }
 
@@ -859,16 +950,17 @@ class DatabaseService {
     }
 
     this.saveProductsToLocalStorage();
+    this.notify();
 
-    if (this.isLiveConnected && auth.currentUser) {
-      try {
+    // Persist to remote db asynchronously if available
+    try {
+      if (auth.currentUser || this.isLiveConnected) {
         await setDoc(doc(db, 'products', finalProduct.id), finalProduct);
-      } catch (err) {
-        console.warn('Firestore setDoc failed:', err);
       }
+    } catch (err) {
+      console.warn('Firestore setDoc failed, safely stored in local cache:', err);
     }
 
-    this.notify();
     return finalProduct;
   }
 

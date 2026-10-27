@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { ShieldCheck, ShieldAlert, KeyRound, LogIn, LogOut, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { signInWithPopup, signOut } from 'firebase/auth';
-import { auth, googleProvider } from '../firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { auth, googleProvider, db } from '../firebase';
 import { AdminUser } from '../types';
 
 interface AdminAuthModalProps {
@@ -34,6 +35,15 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
       // Check if user is the authorized admin email (e.g. fortinclub7@gmail.com)
       if (email === 'fortinclub7@gmail.com') {
         onSetAdminStatus(true);
+        try {
+          await setDoc(doc(db, 'admins', result.user.uid), {
+            email: result.user.email,
+            role: 'admin',
+            createdAt: new Date().toISOString()
+          });
+        } catch (e) {
+          // ignore
+        }
       } else {
         // Any other authenticated user can either be staff or admin with passcode
         onSetAdminStatus(true);

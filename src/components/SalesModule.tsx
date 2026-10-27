@@ -135,7 +135,8 @@ export const SalesModule: React.FC<SalesModuleProps> = ({
   const handleSavePrice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!priceSetupProduct) return;
-    const p = parseFloat(newPriceInput);
+    const cleanPrice = newPriceInput.trim().replace(',', '.');
+    const p = parseFloat(cleanPrice);
     if (isNaN(p) || p <= 0) {
       setErrorMessage('Ingresa un precio mayor a $0.00');
       return;
