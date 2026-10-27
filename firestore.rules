@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isFortinAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == "fortinclub7@gmail.com" && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Admins collection
+    match /admins/{userId} {
+      allow read: if isSignedIn() && isValidId(userId);
+      allow write: if isFortinAdmin() && isValidId(userId);
+    }
+
+    // Products collection
+    match /products/{productId} {
+      allow read: if isSignedIn() && isValidId(productId);
+      
+      // Admin can create or full update/delete
+      allow create: if isFortinAdmin() && isValidId(productId) &&
+        incoming().internalCode is string && incoming().internalCode.size() <= 64 &&
+        incoming().name is string && incoming().name.size() <= 128 &&
+        (incoming().category == 'Bebidas' || incoming().category == 'Snacks') &&
+        incoming().salePrice is number && incoming().salePrice >= 0 &&
+        incoming().availableStock is number &&
+        incoming().minStock is number;
+
+      // Staff can update stock upon sales, replenishments, six-pack unpack
+      allow update: if isSignedIn() && isValidId(productId) && (
+        isFortinAdmin() || (
+          // Staff stock update only
+          incoming().diff(existing()).affectedKeys().hasOnly(['availableStock', 'status', 'updatedAt']) &&
+          incoming().availableStock is number &&
+          (incoming().status == 'Disponible' || incoming().status == 'Stock bajo' || incoming().status == 'Agotado')
+        )
+      );
+
+      allow delete: if isFortinAdmin() && isValidId(productId);
+    }
+
+    // Sales collection
+    match /sales/{saleId} {
+      allow read: if isSignedIn() && isValidId(saleId);
+      allow create: if isSignedIn() && isValidId(saleId) &&
+        incoming().totalAmount is number && incoming().totalAmount >= 0 &&
+        (incoming().paymentMethod == 'Efectivo' || incoming().paymentMethod == 'Transferencia' || incoming().paymentMethod == 'Otros') &&
+        (incoming().status == 'completed' || incoming().status == 'cancelled');
+      allow update, delete: if isFortinAdmin() && isValidId(saleId);
+    }
+
+    // Replenishments collection
+    match /replenishments/{replenishmentId} {
+      allow read: if isSignedIn() && isValidId(replenishmentId);
+      allow create: if isSignedIn() && isValidId(replenishmentId) &&
+        incoming().productId is string && incoming().productId.size() <= 64 &&
+        incoming().quantityAdded is number && incoming().quantityAdded > 0;
+      allow update, delete: if isFortinAdmin() && isValidId(replenishmentId);
+    }
+
+    // Movements collection (Kardex)
+    match /movements/{movementId} {
+      allow read: if isSignedIn() && isValidId(movementId);
+      allow create: if isSignedIn() && isValidId(movementId) &&
+        incoming().productId is string && incoming().productId.size() <= 64 &&
+        incoming().quantityChanged is number;
+      allow update, delete: if isFortinAdmin() && isValidId(movementId);
+    }
+  }
+}

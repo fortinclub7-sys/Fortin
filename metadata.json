@@ -1,0 +1,6 @@
+{
+  "name": "FORTIN CLUB - Punto de Venta e Inventario",
+  "description": "Sistema oficial de punto de venta e inventario para FORTIN CLUB: ventas de bebidas y snacks, control de existencias y reportes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

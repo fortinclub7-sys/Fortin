@@ -1,0 +1,116 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Articulo de inventario y punto de venta para la cancha de futbol",
+      "type": "object",
+      "properties": {
+        "internalCode": { "type": "string", "maxLength": 64 },
+        "barcode": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "enum": ["Bebidas", "Snacks"] },
+        "salePrice": { "type": "number" },
+        "purchaseCost": { "type": "number" },
+        "initialStock": { "type": "number" },
+        "availableStock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "status": { "type": "string", "enum": ["Disponible", "Stock bajo", "Agotado"] },
+        "isSixPack": { "type": "boolean" },
+        "singleUnitId": { "type": "string", "maxLength": 64 },
+        "unitsPerPack": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["internalCode", "name", "category", "salePrice", "availableStock", "minStock", "status"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "Registro de venta finalizada en la cancha",
+      "type": "object",
+      "properties": {
+        "saleNumber": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "dateStr": { "type": "string", "maxLength": 32 },
+        "timeStr": { "type": "string", "maxLength": 32 },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Efectivo", "Transferencia", "Otros"] },
+        "cashReceived": { "type": "number" },
+        "cashChange": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "cancelled"] },
+        "isTest": { "type": "boolean" },
+        "itemsCount": { "type": "number" }
+      },
+      "required": ["saleNumber", "createdAt", "totalAmount", "paymentMethod", "status"]
+    },
+    "Replenishment": {
+      "title": "Replenishment",
+      "description": "Registro de ingreso de mercaderia / reposicion",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "maxLength": 64 },
+        "productName": { "type": "string", "maxLength": 128 },
+        "internalCode": { "type": "string", "maxLength": 64 },
+        "quantityAdded": { "type": "number" },
+        "purchaseCost": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "previousStock": { "type": "number" },
+        "newStock": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "dateStr": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 256 }
+      },
+      "required": ["productId", "productName", "quantityAdded", "previousStock", "newStock", "createdAt"]
+    },
+    "Movement": {
+      "title": "Movement",
+      "description": "Kardex o registro de movimiento de existencias",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "maxLength": 64 },
+        "productName": { "type": "string", "maxLength": 128 },
+        "movementType": { "type": "string", "enum": ["VENTA", "REPOSICION", "DESEMPAQUE_SIX", "AJUSTE_INICIAL", "EDICION"] },
+        "previousStock": { "type": "number" },
+        "quantityChanged": { "type": "number" },
+        "finalStock": { "type": "number" },
+        "referenceId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "dateStr": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 256 }
+      },
+      "required": ["productId", "movementType", "previousStock", "quantityChanged", "finalStock", "createdAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Usuario administrador autorizado del sistema",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["admin", "staff"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Coleccion de productos de bebidas y snacks del inventario"
+    },
+    "/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "Coleccion de ventas registradas en el punto de venta"
+    },
+    "/replenishments/{replenishmentId}": {
+      "schema": { "$ref": "#/entities/Replenishment" },
+      "description": "Historial de reposiciones de mercaderia"
+    },
+    "/movements/{movementId}": {
+      "schema": { "$ref": "#/entities/Movement" },
+      "description": "Kardex de movimientos y modificaciones de existencias"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "Lista de administradores con permisos de modificacion"
+    }
+  }
+}
