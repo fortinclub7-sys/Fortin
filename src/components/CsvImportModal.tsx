@@ -79,6 +79,7 @@ SNK-010,7861007700999,Platanitos Dulces 50g,Snacks,0.60,0.35,30,30,10`;
             <h3 className="font-bold text-base">Importar / Exportar Inventario CSV</h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >

@@ -26,7 +26,8 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
   const [salePrice, setSalePrice] = useState('');
   const [purchaseCost, setPurchaseCost] = useState('');
   const [availableStock, setAvailableStock] = useState('');
-  const [minStock, setMinStock] = useState('5');
+  const [minStock, setMinStock] = useState('3');
+  const [targetStock, setTargetStock] = useState('15');
   const [isSixPack, setIsSixPack] = useState(false);
   const [singleUnitId, setSingleUnitId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -38,10 +39,11 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       setBarcode(product.barcode || '');
       setName(product.name || '');
       setCategory(product.category || 'Bebidas');
-      setSalePrice(product.salePrice ? String(product.salePrice) : '');
-      setPurchaseCost(product.purchaseCost ? String(product.purchaseCost) : '0');
+      setSalePrice(product.salePrice > 0 ? String(product.salePrice) : '');
+      setPurchaseCost(product.purchaseCost > 0 ? String(product.purchaseCost) : '');
       setAvailableStock(String(product.availableStock ?? 0));
-      setMinStock(String(product.minStock ?? 5));
+      setMinStock(String(product.minStock ?? 3));
+      setTargetStock(String(product.targetStock ?? 15));
       setIsSixPack(Boolean(product.isSixPack));
       setSingleUnitId(product.singleUnitId || '');
     } else {
@@ -52,7 +54,8 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       setSalePrice('');
       setPurchaseCost('');
       setAvailableStock('10');
-      setMinStock('5');
+      setMinStock('3');
+      setTargetStock('15');
       setIsSixPack(false);
       setSingleUnitId('');
     }
@@ -70,17 +73,34 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
       return;
     }
 
-    const price = parseFloat(salePrice);
+    // Support both dot and comma as decimal separator
+    const cleanPrice = salePrice.trim().replace(',', '.');
+    const price = cleanPrice ? parseFloat(cleanPrice) : 0;
     if (isNaN(price) || price < 0) {
-      setError('Ingresa un precio de venta válido en dólares.');
+      setError('Ingresa un precio de venta válido en dólares (o 0 si aún no está asignado).');
+      return;
+    }
+
+    const cleanCost = purchaseCost.trim().replace(',', '.');
+    const cost = cleanCost ? parseFloat(cleanCost) : 0;
+    if (isNaN(cost) || cost < 0) {
+      setError('El costo de compra debe ser un valor positivo o cero.');
       return;
     }
 
     const stock = parseInt(availableStock, 10);
     if (isNaN(stock) || stock < 0) {
-      setError('Ingresa una cantidad de stock válida.');
+      setError('Ingresa una cantidad de existencias válida (cero o mayor).');
       return;
     }
+
+    const min = parseInt(minStock, 10);
+    if (isNaN(min) || min < 0) {
+      setError('El stock mínimo debe ser cero o mayor.');
+      return;
+    }
+
+    const target = parseInt(targetStock, 10) || 15;
 
     try {
       setIsSubmitting(true);
@@ -91,9 +111,10 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
         name: name.trim(),
         category,
         salePrice: price,
-        purchaseCost: parseFloat(purchaseCost) || 0,
+        purchaseCost: cost,
         availableStock: stock,
-        minStock: parseInt(minStock, 10) || 5,
+        minStock: min,
+        targetStock: target,
         isSixPack,
         singleUnitId: isSixPack ? singleUnitId : undefined,
         unitsPerPack: isSixPack ? 6 : undefined
@@ -108,7 +129,10 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
   const handleDelete = async () => {
     if (!product || !onDelete) return;
-    if (!confirm(`¿Eliminar definitivamente el producto "${product.name}"?`)) return;
+    const confirmed = window.confirm(
+      `¿Confirmas la eliminación del producto "${product.name}" del catálogo activo?\n\nNota: Las ventas pasadas y movimientos en el Kardex se conservarán intactos para mantener la integridad de los reportes.`
+    );
+    if (!confirmed) return;
 
     try {
       setIsSubmitting(true);
@@ -123,7 +147,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150 my-6">
         
         {/* Header */}
         <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
@@ -131,8 +155,10 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
             {product ? 'Editar Producto del Catálogo' : 'Nuevo Producto de Inventario'}
           </h3>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Cerrar ventana"
           >
             <X className="w-5 h-5" />
           </button>
@@ -206,22 +232,21 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
             </div>
           </div>
 
-          {/* Prices */}
+          {/* Prices in USD */}
           <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
             <div>
               <label className="text-xs font-bold text-slate-700 block mb-1">
                 Precio de Venta ($ USD) *:
               </label>
               <input
-                type="number"
-                step="0.01"
-                min="0"
-                required
+                type="text"
+                inputMode="decimal"
                 value={salePrice}
                 onChange={(e) => setSalePrice(e.target.value)}
-                placeholder="1.50"
+                placeholder="0.00 (ej: 1.50)"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-emerald-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">En dólares estadounidenses</span>
             </div>
 
             <div>
@@ -229,19 +254,19 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 Costo de Compra ($ USD):
               </label>
               <input
-                type="number"
-                step="0.01"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 value={purchaseCost}
                 onChange={(e) => setPurchaseCost(e.target.value)}
-                placeholder="1.00"
+                placeholder="0.00 (opcional)"
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">Para cálculo de ganancia</span>
             </div>
           </div>
 
           {/* Stocks */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-bold text-slate-700 block mb-1">
                 Stock Disponible *:
@@ -254,11 +279,12 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 onChange={(e) => setAvailableStock(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">Existencias físicas</span>
             </div>
 
             <div>
               <label className="text-xs font-bold text-slate-700 block mb-1">
-                Stock Mínimo (Alerta):
+                Stock Mínimo:
               </label>
               <input
                 type="number"
@@ -267,6 +293,21 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 onChange={(e) => setMinStock(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">Alerta "Stock bajo"</span>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">
+                Stock Objetivo:
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={targetStock}
+                onChange={(e) => setTargetStock(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+              />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">Para sugerencias</span>
             </div>
           </div>
 
@@ -319,6 +360,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 onClick={handleDelete}
                 disabled={isSubmitting}
                 className="px-3 py-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl text-xs font-bold transition-colors flex items-center gap-1"
+                title="Eliminar producto del catálogo activo"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Eliminar</span>
@@ -330,6 +372,7 @@ export const ProductFormModal: React.FC<ProductFormModalProps> = ({
                 type="button"
                 onClick={onClose}
                 className="px-4 py-2 text-sm font-bold text-slate-600 hover:text-slate-800"
+                title="Cerrar sin guardar"
               >
                 Cancelar
               </button>

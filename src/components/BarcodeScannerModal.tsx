@@ -150,6 +150,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             <h3 className="font-bold text-base">Escanear Código de Barras</h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
@@ -216,6 +217,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         {/* Footer */}
         <div className="p-3 bg-slate-50 flex justify-end">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-sm font-bold text-slate-600 hover:text-slate-900"
           >

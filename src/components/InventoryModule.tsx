@@ -18,12 +18,16 @@ import {
   DollarSign,
   Tag,
   Boxes,
-  ClipboardList
+  ClipboardList,
+  ShieldAlert,
+  HelpCircle,
+  X
 } from 'lucide-react';
 import { Product, InventoryMovement, AdminUser } from '../types';
 import { ProductFormModal } from './ProductFormModal';
 import { SixPackModal } from './SixPackModal';
 import { CsvImportModal } from './CsvImportModal';
+import { INITIAL_PRODUCTS_OCT_2026 } from '../data/initialProducts';
 
 interface InventoryModuleProps {
   products: Product[];
@@ -80,6 +84,9 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   const [adjustReasonInput, setAdjustReasonInput] = useState<string>('');
   const [isSavingAdjust, setIsSavingAdjust] = useState(false);
 
+  // Audit Diagnostic Banner state
+  const [showAuditModal, setShowAuditModal] = useState(false);
+
   // Stats
   const stats = useMemo(() => {
     const total = products.length;
@@ -92,6 +99,43 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
     return { total, available, low, out, totalStock, totalValueCost, totalValueSale };
   }, [products]);
+
+  // Initial Inventory Reconciliation Diagnostic (Specifically checking 27/10/2026 stock vs movements)
+  const auditDiscrepancies = useMemo(() => {
+    const list: {
+      productId: string;
+      name: string;
+      initialOct27: number;
+      currentStock: number;
+      movementsSum: number;
+      theoreticalStock: number;
+      difference: number;
+      movementsList: InventoryMovement[];
+    }[] = [];
+
+    INITIAL_PRODUCTS_OCT_2026.forEach(initP => {
+      const current = products.find(p => p.id === initP.id || p.internalCode === initP.internalCode);
+      const prodMovements = movements.filter(m => m.productId === initP.id || m.internalCode === initP.internalCode);
+      const movSum = prodMovements.reduce((sum, m) => sum + m.quantityChanged, 0);
+      const theoretical = initP.initialStock + movSum;
+      const currentVal = current ? current.availableStock : 0;
+
+      if (currentVal !== theoretical) {
+        list.push({
+          productId: current ? current.id : initP.id,
+          name: initP.name,
+          initialOct27: initP.initialStock,
+          currentStock: currentVal,
+          movementsSum: movSum,
+          theoreticalStock: theoretical,
+          difference: currentVal - theoretical,
+          movementsList: prodMovements
+        });
+      }
+    });
+
+    return list;
+  }, [products, movements]);
 
   // Filter products
   const filteredProducts = useMemo(() => {
@@ -106,7 +150,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     });
   }, [products, categoryFilter, statusFilter, searchQuery]);
 
-  // Pending Replenishments (Stock bajo or Agotado, or available < target)
+  // Pending Replenishments (Stock bajo or Agotado)
   const pendingReplenishments = useMemo(() => {
     return products.filter(p => p.availableStock <= p.minStock || p.availableStock === 0);
   }, [products]);
@@ -125,12 +169,15 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     return products.filter(p => p.isSixPack);
   }, [products]);
 
+  // Open edit modal directly
   const handleEditClick = (product: Product) => {
-    if (!adminUser.isAdmin) {
-      onOpenAdminModal();
-      return;
-    }
     setEditingProduct(product);
+    setIsProductModalOpen(true);
+  };
+
+  // Open create modal directly
+  const handleCreateClick = () => {
+    setEditingProduct(null);
     setIsProductModalOpen(true);
   };
 
@@ -142,8 +189,12 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   const handleSavePrice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!priceModalProduct) return;
-    const p = parseFloat(priceInput);
-    if (isNaN(p) || p < 0) return;
+    const cleanPrice = priceInput.trim().replace(',', '.');
+    const p = parseFloat(cleanPrice);
+    if (isNaN(p) || p < 0) {
+      alert('Ingresa un precio válido en dólares.');
+      return;
+    }
 
     try {
       setIsSavingPrice(true);
@@ -157,24 +208,23 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   };
 
   const handleAdjustClick = (product: Product) => {
-    if (!adminUser.isAdmin) {
-      onOpenAdminModal();
-      return;
-    }
     setAdjustModalProduct(product);
     setAdjustStockInput(String(product.availableStock));
-    setAdjustReasonInput('Corrección física de conteo de existencias');
+    setAdjustReasonInput('Ajuste de inventario físico verificado');
   };
 
   const handleSaveAdjust = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adjustModalProduct) return;
     const newStock = parseInt(adjustStockInput, 10);
-    if (isNaN(newStock) || newStock < 0) return;
+    if (isNaN(newStock) || newStock < 0) {
+      alert('Ingresa una cantidad de existencias válida.');
+      return;
+    }
 
     try {
       setIsSavingAdjust(true);
-      await onAdjustStock(adjustModalProduct.id, newStock, adjustReasonInput.trim());
+      await onAdjustStock(adjustModalProduct.id, newStock, adjustReasonInput.trim() || 'Ajuste manual de existencias');
       setAdjustModalProduct(null);
     } catch (err: any) {
       alert(err.message || 'Error al ajustar existencias.');
@@ -183,13 +233,14 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     }
   };
 
-  const handleCreateClick = () => {
-    if (!adminUser.isAdmin) {
-      onOpenAdminModal();
-      return;
-    }
-    setEditingProduct(null);
-    setIsProductModalOpen(true);
+  // Quick reconcile for an audited product
+  const handleReconcileToTheoretical = async (productId: string, theoreticalStock: number, name: string) => {
+    const confirmed = window.confirm(
+      `¿Deseas conciliar las existencias de "${name}" a ${theoreticalStock} unidades según el inventario oficial del 27/10/2026? Se registrará un movimiento de auditoría en el Kardex.`
+    );
+    if (!confirmed) return;
+
+    await onAdjustStock(productId, theoreticalStock, `Conciliación con inventario oficial inicial (27/10/2026): ${theoreticalStock} unidades`);
   };
 
   return (
@@ -203,17 +254,19 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
             <h2 className="text-xl font-black text-slate-800 tracking-tight">Inventario Oficial FORTIN CLUB</h2>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            22 productos y 165 unidades registradas. Control de precios en USD, kardex auditable y conversión de SIX.
+            22 productos oficiales. Control de existencias, precios en USD, reposiciones y kardex auditable.
           </p>
         </div>
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
           
-          {/* VISIBLE MANDATORY BUTTON: REGISTRAR REPOSICIÓN */}
+          {/* VISIBLE BUTTON: REGISTRAR REPOSICIÓN */}
           <button
+            type="button"
             onClick={onOpenReplenishments}
             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-xl shadow-md transition-all active:scale-95"
+            title="Registrar entrada de mercadería"
           >
             <PackagePlus className="w-4 h-4" />
             <span>Registrar reposición</span>
@@ -222,6 +275,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
           {/* SIX Pack unpack button */}
           {sixPackProducts.length > 0 && (
             <button
+              type="button"
               onClick={() => setIsSixModalOpen(true)}
               className="flex items-center gap-1.5 px-3.5 py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-xl font-bold text-xs sm:text-sm transition-all"
               title="Convertir cajas SIX a unidades individuales"
@@ -231,52 +285,104 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
             </button>
           )}
 
+          {/* Audit Diagnostic Trigger */}
+          <button
+            type="button"
+            onClick={() => setShowAuditModal(true)}
+            className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors ${
+              auditDiscrepancies.length > 0
+                ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
+            title="Auditoría de existencias al 27 de octubre de 2026"
+          >
+            <ClipboardList className="w-4 h-4 text-amber-700" />
+            <span>Auditoría 27/10 {auditDiscrepancies.length > 0 && `(${auditDiscrepancies.length})`}</span>
+          </button>
+
           {/* CSV Import/Export */}
           <button
+            type="button"
             onClick={() => setIsCsvModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs sm:text-sm transition-colors"
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs sm:text-sm transition-colors"
           >
             <FileSpreadsheet className="w-4 h-4 text-slate-600" />
             <span>CSV</span>
           </button>
 
-          {/* New Product (Admin) */}
+          {/* New Product */}
           <button
+            type="button"
             onClick={handleCreateClick}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors"
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors"
           >
             <Plus className="w-4 h-4" />
-            <span>Nuevo Producto</span>
+            <span>+ Nuevo Producto</span>
           </button>
 
         </div>
       </div>
 
-      {/* KPI Stats Cards */}
+      {/* KPI Stats Cards - Clickable to instantly filter */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-        <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('all');
+            setCategoryFilter('all');
+            setSubView('catalog');
+          }}
+          className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs text-left hover:border-slate-400 transition-all active:scale-98"
+        >
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Catálogo Oficial</span>
           <div className="text-xl font-black text-slate-900 mt-1">{stats.total} productos</div>
           <span className="text-[11px] text-slate-500 font-medium">{stats.totalStock} unidades en total</span>
-        </div>
+        </button>
 
-        <div className="bg-white p-3.5 rounded-2xl border border-emerald-200 shadow-xs">
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('Disponible');
+            setSubView('catalog');
+          }}
+          className={`p-3.5 rounded-2xl border shadow-xs text-left transition-all active:scale-98 ${
+            statusFilter === 'Disponible' ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/30' : 'bg-white border-emerald-200 hover:bg-emerald-50/50'
+          }`}
+        >
           <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Disponibles</span>
           <div className="text-xl font-black text-emerald-700 mt-1">{stats.available}</div>
-          <span className="text-[11px] text-emerald-600 font-semibold">Stock óptimo</span>
-        </div>
+          <span className="text-[11px] text-emerald-600 font-semibold">Clic para filtrar</span>
+        </button>
 
-        <div className="bg-white p-3.5 rounded-2xl border border-amber-200 shadow-xs">
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('Stock bajo');
+            setSubView('catalog');
+          }}
+          className={`p-3.5 rounded-2xl border shadow-xs text-left transition-all active:scale-98 ${
+            statusFilter === 'Stock bajo' ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/30' : 'bg-white border-amber-200 hover:bg-amber-50/50'
+          }`}
+        >
           <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Stock Bajo</span>
           <div className="text-xl font-black text-amber-600 mt-1">{stats.low}</div>
-          <span className="text-[11px] text-amber-600 font-semibold">Requiere reposición</span>
-        </div>
+          <span className="text-[11px] text-amber-600 font-semibold">Clic para filtrar</span>
+        </button>
 
-        <div className="bg-white p-3.5 rounded-2xl border border-rose-200 shadow-xs">
+        <button
+          type="button"
+          onClick={() => {
+            setStatusFilter('Agotado');
+            setSubView('catalog');
+          }}
+          className={`p-3.5 rounded-2xl border shadow-xs text-left transition-all active:scale-98 ${
+            statusFilter === 'Agotado' ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/30' : 'bg-white border-rose-200 hover:bg-rose-50/50'
+          }`}
+        >
           <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block">Agotados</span>
           <div className="text-xl font-black text-rose-600 mt-1">{stats.out}</div>
           <span className="text-[11px] text-rose-600 font-semibold">Existencias en 0</span>
-        </div>
+        </button>
 
         <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Valor al Costo</span>
@@ -295,6 +401,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
       <div className="flex flex-wrap items-center justify-between border-b border-slate-200 pb-2 gap-2">
         <div className="flex gap-2">
           <button
+            type="button"
             onClick={() => setSubView('catalog')}
             className={`px-4 py-2 font-bold text-sm rounded-xl transition-all ${
               subView === 'catalog'
@@ -306,6 +413,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
           </button>
           
           <button
+            type="button"
             onClick={() => setSubView('pending_replenishment')}
             className={`px-4 py-2 font-bold text-sm rounded-xl transition-all flex items-center gap-1.5 ${
               subView === 'pending_replenishment'
@@ -318,6 +426,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => setSubView('kardex')}
             className={`px-4 py-2 font-bold text-sm rounded-xl transition-all ${
               subView === 'kardex'
@@ -331,6 +440,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
         {subView === 'kardex' && (
           <button
+            type="button"
             onClick={onExportMovementsCsv}
             className="text-xs font-bold text-slate-700 hover:text-emerald-700 flex items-center gap-1"
           >
@@ -348,7 +458,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filtrar por nombre, código interno o código de barras..."
+            placeholder="Buscar por nombre, código interno o código de barras..."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium"
           />
         </div>
@@ -358,7 +468,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value as any)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden cursor-pointer"
             >
               <option value="all">Todas las Categorías</option>
               <option value="Bebidas">🥤 Bebidas</option>
@@ -368,13 +478,27 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden cursor-pointer"
             >
               <option value="all">Todos los Estados</option>
               <option value="Disponible">🟢 Disponible</option>
               <option value="Stock bajo">🟡 Stock bajo</option>
               <option value="Agotado">🔴 Agotado</option>
             </select>
+
+            {(statusFilter !== 'all' || categoryFilter !== 'all' || searchQuery) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setCategoryFilter('all');
+                  setSearchQuery('');
+                }}
+                className="text-xs font-bold text-slate-500 hover:text-slate-800 underline px-1"
+              >
+                Limpiar
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -391,7 +515,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                   <th className="px-4 py-3">Categoría</th>
                   <th className="px-4 py-3 text-right">P. Venta (USD)</th>
                   <th className="px-4 py-3 text-right">Costo (USD)</th>
-                  <th className="px-4 py-3 text-center">Inicial</th>
+                  <th className="px-4 py-3 text-center">Inicial (27/10)</th>
                   <th className="px-4 py-3 text-center">Disponible</th>
                   <th className="px-4 py-3 text-center">Mínimo</th>
                   <th className="px-4 py-3 text-center">Estado</th>
@@ -432,16 +556,17 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                         </span>
                       </td>
 
-                      {/* Sale price with quick edit trigger */}
+                      {/* Sale price */}
                       <td className="px-4 py-3 text-right">
                         <button
+                          type="button"
                           onClick={() => handlePriceClick(product)}
                           className={`font-mono font-bold px-2 py-1 rounded-lg transition-all ${
                             hasPrice 
                               ? 'text-emerald-700 hover:bg-emerald-50' 
                               : 'text-amber-700 bg-amber-50 hover:bg-amber-100 text-xs font-black'
                           }`}
-                          title="Haga clic para editar el precio de venta"
+                          title="Clic para editar precio de venta"
                         >
                           {hasPrice ? `$${product.salePrice.toFixed(2)}` : '⚠️ Fijar Precio'}
                         </button>
@@ -455,8 +580,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                         {product.initialStock}
                       </td>
 
+                      {/* Available Stock with quick adjust */}
                       <td className="px-4 py-3 text-center">
                         <button
+                          type="button"
                           onClick={() => handleAdjustClick(product)}
                           className={`font-black font-mono text-sm px-2.5 py-0.5 rounded-lg transition-all hover:scale-105 ${
                             isOut 
@@ -465,7 +592,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                                 ? 'bg-amber-100 text-amber-800' 
                                 : 'bg-emerald-50 text-emerald-800'
                           }`}
-                          title="Clic para registrar ajuste de stock"
+                          title="Clic para ajustar stock manualmente"
                         >
                           {product.availableStock}
                         </button>
@@ -492,7 +619,9 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
+                          {/* Price edit */}
                           <button
+                            type="button"
                             onClick={() => handlePriceClick(product)}
                             className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50 transition-colors"
                             title="Editar precio de venta ($)"
@@ -500,7 +629,9 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                             <DollarSign className="w-4 h-4" />
                           </button>
 
+                          {/* Stock adjust */}
                           <button
+                            type="button"
                             onClick={() => handleAdjustClick(product)}
                             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
                             title="Ajuste manual de existencias"
@@ -508,16 +639,20 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                             <SlidersHorizontal className="w-4 h-4" />
                           </button>
 
+                          {/* Full Edit Modal */}
                           <button
+                            type="button"
                             onClick={() => handleEditClick(product)}
                             className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-700 hover:bg-slate-100 transition-colors"
-                            title="Editar ficha completa de producto"
+                            title="Editar ficha completa del producto"
                           >
                             <Edit3 className="w-4 h-4" />
                           </button>
 
+                          {/* SIX pack unpack */}
                           {product.isSixPack && product.availableStock > 0 && (
                             <button
+                              type="button"
                               onClick={() => setIsSixModalOpen(true)}
                               className="p-1.5 rounded-lg text-purple-600 hover:bg-purple-50 transition-colors"
                               title="Desempacar este SIX pack"
@@ -536,7 +671,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         </div>
       )}
 
-      {/* SUB-VIEW 2: PENDIENTES DE REPOSICIÓN (Mandatory Section 7) */}
+      {/* SUB-VIEW 2: PENDIENTES DE REPOSICIÓN */}
       {subView === 'pending_replenishment' && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
           <div className="p-4 bg-amber-50/70 border-b border-amber-200 flex items-center justify-between">
@@ -550,6 +685,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
               </p>
             </div>
             <button
+              type="button"
               onClick={onOpenReplenishments}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs"
             >
@@ -574,7 +710,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {pendingReplenishments.map(p => {
-                  const target = p.targetStock || 20;
+                  const target = p.targetStock || 15;
                   const suggested = Math.max(0, target - p.availableStock);
 
                   return (
@@ -607,6 +743,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                       </td>
                       <td className="px-4 py-3 text-center">
                         <button
+                          type="button"
                           onClick={onOpenReplenishments}
                           className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-2xs"
                         >
@@ -719,31 +856,25 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         </div>
       )}
 
-      {/* Reset to Oct 27 2026 button for admin */}
-      {adminUser.isAdmin && (
-        <div className="pt-4 border-t border-slate-200 flex justify-end">
-          <button
-            onClick={() => {
-              if (confirm('¿Restablecer el catálogo al inventario oficial de FORTIN CLUB (27 de Octubre de 2026)?')) {
-                onResetInitialInventory();
-              }
-            }}
-            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-700 transition-colors font-medium"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Restablecer Inventario Oficial FORTIN CLUB (27 de Octubre de 2026)</span>
-          </button>
-        </div>
-      )}
-
       {/* QUICK PRICE EDIT MODAL */}
       {priceModalProduct && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-100 p-5 space-y-4 animate-in fade-in zoom-in-95">
-            <h4 className="font-black text-slate-800 text-sm flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-emerald-600" />
-              <span>Editar Precio de Venta (USD)</span>
-            </h4>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h4 className="font-black text-slate-800 text-sm flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-emerald-600" />
+                <span>Editar Precio de Venta (USD)</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setPriceModalProduct(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                title="Cerrar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
             <p className="text-xs text-slate-600">
               Producto: <span className="font-bold text-slate-800">{priceModalProduct.name}</span>
             </p>
@@ -756,9 +887,8 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     required
                     autoFocus
                     value={priceInput}
@@ -797,10 +927,21 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
       {adjustModalProduct && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 p-5 space-y-4 animate-in fade-in zoom-in-95">
-            <h4 className="font-black text-slate-800 text-sm flex items-center gap-2">
-              <SlidersHorizontal className="w-5 h-5 text-emerald-600" />
-              <span>Ajuste Manual de Existencias</span>
-            </h4>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h4 className="font-black text-slate-800 text-sm flex items-center gap-2">
+                <SlidersHorizontal className="w-5 h-5 text-emerald-600" />
+                <span>Ajuste Manual de Existencias</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setAdjustModalProduct(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                title="Cerrar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
             <div className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
               <span className="font-bold text-slate-800">{adjustModalProduct.name}</span>
               <div className="flex justify-between mt-1">
@@ -834,7 +975,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                   required
                   value={adjustReasonInput}
                   onChange={(e) => setAdjustReasonInput(e.target.value)}
-                  placeholder="Ej: Conteo físico, rotura, o corrección de inventario"
+                  placeholder="Ej: Conteo físico, rotura o ajuste auditado"
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
@@ -856,6 +997,91 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* INITIAL INVENTORY AUDIT MODAL (Section 6) */}
+      {showAuditModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 my-6">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-base">Auditoría de Existencias Oficiales (27/10/2026)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAuditModal(false)}
+                className="p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto text-xs text-slate-700">
+              <p className="text-slate-600">
+                Esta herramienta compara las existencias actuales con el inventario inicial oficial del <strong>27 de octubre de 2026 (165 unidades en 22 productos)</strong> y verifica si las diferencias corresponden a ventas reales, reposiciones o si requieren conciliación:
+              </p>
+
+              {auditDiscrepancies.length === 0 ? (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-center text-emerald-800 font-bold">
+                  ✓ Todas las existencias coinciden matemáticamente con el inventario oficial del 27/10/2026 y los movimientos registrados en el Kardex.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 font-bold flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <span>Se detectaron {auditDiscrepancies.length} productos con variación frente al balance teórico:</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {auditDiscrepancies.map(d => (
+                      <div key={d.productId} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                        <div className="flex justify-between items-start font-bold">
+                          <span className="text-slate-900 text-sm">{d.name}</span>
+                          <span className="text-slate-500">
+                            Actual: <strong className="text-slate-900 font-mono">{d.currentStock}</strong> | Oficial 27/10: <strong className="font-mono">{d.initialOct27}</strong>
+                          </span>
+                        </div>
+
+                        <div className="text-[11px] text-slate-600">
+                          {d.movementsList.length > 0 ? (
+                            <span>
+                              Movimientos registrados: {d.movementsList.map(m => `${m.movementType} (${m.quantityChanged > 0 ? '+' : ''}${m.quantityChanged})`).join(', ')}.
+                            </span>
+                          ) : (
+                            <span className="text-amber-800 font-semibold">
+                              ⚠️ No existen ventas ni movimientos que justifiquen la variación de {d.initialOct27} a {d.currentStock} unidades.
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleReconcileToTheoretical(d.productId, d.initialOct27, d.name)}
+                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs"
+                          >
+                            Conciliar a {d.initialOct27} unidades
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAuditModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl"
+              >
+                Cerrar Auditoría
+              </button>
+            </div>
           </div>
         </div>
       )}

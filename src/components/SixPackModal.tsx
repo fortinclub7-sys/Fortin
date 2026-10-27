@@ -70,6 +70,7 @@ export const SixPackModal: React.FC<SixPackModalProps> = ({
             <h3 className="font-bold text-base">Operación Controlada: Desempacar SIX Pack</h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-emerald-200 hover:text-white hover:bg-emerald-800 transition-colors"
           >

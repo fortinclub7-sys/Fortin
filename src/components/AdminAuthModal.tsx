@@ -89,6 +89,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
             </h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 rounded-lg text-slate-400 hover:text-white transition-colors"
           >
